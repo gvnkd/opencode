@@ -32,6 +32,50 @@ function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
   return text.replaceAll("\n", "\r\n")
 }
 
+/** Detect base indentation from lines before startLine or after endLine */
+function detectBaseIndent(lines: string[], startIdx: number, endIdx: number): number {
+  // Check line before range
+  if (startIdx > 0) {
+    const prev = lines[startIdx - 1]
+    const m = prev.match(/^(\s*)/)
+    if (m && m[1].length > 0) return m[1].length
+  }
+  // Check line after range
+  if (endIdx < lines.length) {
+    const next = lines[endIdx]
+    const m = next.match(/^(\s*)/)
+    if (m && m[1].length > 0) return m[1].length
+  }
+  return 0
+}
+
+/** Adjust content indentation to match detected base indent level */
+function adjustIndent(content: string, targetIndent: number): string {
+  const lines = content.split("\n")
+  if (lines.length === 0) return content
+
+  // Find minimum non-empty indent in new content
+  const nonEmpty = lines.filter((l) => l.trim().length > 0)
+  if (nonEmpty.length === 0) return content
+
+  let minIndent = Infinity
+  for (const line of nonEmpty) {
+    const m = line.match(/^(\s*)/)
+    if (m) minIndent = Math.min(minIndent, m[1].length)
+  }
+  if (minIndent === Infinity) minIndent = 0
+
+  // Adjust each line to target indent baseline
+  return lines.map((line) => {
+    if (line.trim().length === 0) return ""
+    const m = line.match(/^( *)(.*)$/)
+    if (!m) return line
+    const currentIndent = m[1].length - minIndent // Relative indent from content base
+    const newIndent = targetIndent + currentIndent  // Apply to target baseline
+    return " ".repeat(Math.max(0, newIndent)) + m[2]
+  }).join("\n")
+}
+
 const locks = new Map<string, Semaphore.Semaphore>()
 
 function lock(filePath: string) {
@@ -46,12 +90,18 @@ function lock(filePath: string) {
 
 export const Parameters = Schema.Struct({
   filePath: Schema.String.annotate({ description: "The absolute path to the file to modify" }),
-  oldString: Schema.String.annotate({ description: "The text to replace" }),
+  oldString: Schema.optional(Schema.String).annotate({ description: "The text to replace (omit when using line range)" }),
   newString: Schema.String.annotate({
-    description: "The text to replace it with (must be different from oldString)",
+    description: "The text to replace with (must be different from oldString or existing content)",
   }),
   replaceAll: Schema.optional(Schema.Boolean).annotate({
     description: "Replace all occurrences of oldString (default false)",
+  }),
+  startLine: Schema.optional(Schema.Number).annotate({
+    description: "Start line number (1-indexed) for line-based replacement",
+  }),
+  endLine: Schema.optional(Schema.Number).annotate({
+    description: "End line number (1-indexed) for line-based replacement. Defaults to startLine if omitted.",
   }),
 })
 
@@ -72,7 +122,8 @@ export const EditTool = Tool.define(
             throw new Error("filePath is required")
           }
 
-          if (params.oldString === params.newString) {
+          // Only check for identical strings when using string-based mode
+          if (params.oldString !== undefined && params.oldString === params.newString) {
             throw new Error("No changes to apply: oldString and newString are identical.")
           }
 
@@ -113,6 +164,59 @@ export const EditTool = Tool.define(
                   file: filePath,
                   event: existed ? "change" : "add",
                 })
+                return
+              }
+
+              // Line-range replacement mode (startLine/endLine)
+              if (params.startLine !== undefined && params.oldString === undefined) {
+                const info = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+                if (!info) throw new Error(`File ${filePath} not found`)
+                if (info.type === "Directory") throw new Error(`Path is a directory, not a file: ${filePath}`)
+
+                const source = yield* Bom.readFile(afs, filePath)
+                contentOld = source.text
+                const lines = contentOld.split("\n")
+
+                // Convert 1-indexed to 0-indexed array indices
+                const startIdx = params.startLine - 1
+                const endIdx = (params.endLine ?? params.startLine) - 1
+
+                if (startIdx < 0 || endIdx >= lines.length || startIdx > endIdx) {
+                  throw new Error(`Invalid line range: ${params.startLine}-${params.endLine} for file with ${lines.length} lines`)
+                }
+
+                // Detect base indentation from surrounding context
+                const baseIndent = detectBaseIndent(lines, startIdx, endIdx + 1)
+
+                // Adjust new content indentation to match context
+                const adjustedNew = adjustIndent(params.newString, baseIndent)
+
+                // Replace the line range
+                const beforeLines = lines.slice(0, startIdx)
+                const afterLines = lines.slice(endIdx + 1)
+                const newContentLines = adjustedNew.split("\n")
+                const finalLines = [...beforeLines, ...newContentLines, ...afterLines]
+
+                contentNew = finalLines.join("\n")
+                diff = trimDiff(createTwoFilesPatch(filePath, filePath, normalizeLineEndings(contentOld), normalizeLineEndings(contentNew)))
+
+                yield* ctx.ask({
+                  permission: "edit",
+                  patterns: [path.relative(instance.worktree, filePath)],
+                  always: ["*"],
+                  metadata: { filepath: filePath, diff },
+                })
+
+                const next = Bom.split(contentNew)
+                const desiredBom = source.bom || next.bom
+                yield* afs.writeWithDirs(filePath, Bom.join(next.text, desiredBom))
+
+                if (yield* format.file(filePath)) {
+                  contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
+                }
+                yield* bus.publish(File.Event.Edited, { file: filePath })
+                yield* bus.publish(FileWatcher.Event.Updated, { file: filePath, event: "change" })
+                diff = trimDiff(createTwoFilesPatch(filePath, filePath, normalizeLineEndings(contentOld), normalizeLineEndings(contentNew)))
                 return
               }
 
