@@ -32,65 +32,7 @@ function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
   return text.replaceAll("\n", "\r\n")
 }
 
-/** Detect base indentation from surrounding context or first line of range */
-function detectBaseIndent(lines: string[], startIdx: number, endIdx: number, originalRange?: string[]): number {
-  // If we have original lines being replaced, use their min indent
-  if (originalRange && originalRange.length > 0) {
-    const nonEmpty = originalRange.filter((l) => l.trim().length > 0)
-    if (nonEmpty.length > 0) {
-      let minIndent = Infinity
-      for (const line of nonEmpty) {
-        const m = line.match(/^(\s*)/)
-        if (m && m[1].length < minIndent) minIndent = m[1].length
-      }
-      return minIndent === Infinity ? 0 : minIndent
-    }
-  }
-
-  // Check line before range
-  if (startIdx > 0) {
-    const prev = lines[startIdx - 1]
-    const m = prev.match(/^(\s*)/)
-    if (m && m[1].length > 0) return m[1].length
-  }
-  // Check line after range
-  if (endIdx < lines.length) {
-    const next = lines[endIdx]
-    const m = next.match(/^(\s*)/)
-    if (m && m[1].length > 0) return m[1].length
-  }
-  return 0
-}
-
-/** Adjust content indentation to match detected base indent level */
-function adjustIndent(content: string, targetIndent: number): string {
-  const lines = content.split("\n")
-  if (lines.length === 0) return content
-
-  // Find minimum non-empty indent in new content  
-  const nonEmpty = lines.filter((l) => l.trim().length > 0)
-  if (nonEmpty.length === 0) return content
-
-  let minIndent = Infinity
-  for (const line of nonEmpty) {
-    const m = line.match(/^(\s*)/)
-    if (m && m[1].length < minIndent) minIndent = m[1].length
-  }
-  if (minIndent === Infinity) minIndent = 0
-
-  // If content already matches target indent, no adjustment needed
-  if (minIndent === targetIndent) return content
-
-  // Adjust each line to target indent baseline. Allow lines to go shallower
-  // than targetIndent by using the full relative delta from the content's own base.
-  return lines.map((line) => {
-    if (line.trim().length === 0) return ""
-    const m = line.match(/^( *)(.*)$/)
-    if (!m) return line
-    // Preserve original indentation exactly — no forced floor clamping to targetIndent
-    return " ".repeat(m[1].length - minIndent + targetIndent) + m[2]
-  }).join("\n")
-}
+/** Line-range replacement inserts content verbatim — no forced indentation adjustment */
 
 const locks = new Map<string, Semaphore.Semaphore>()
 
@@ -201,17 +143,12 @@ export const EditTool = Tool.define(
                   throw new Error(`Invalid line range: ${params.startLine}-${params.endLine} for file with ${lines.length} lines`)
                 }
 
-                // Detect base indentation from original lines being replaced (preserves context indent)
-                const originalRange = lines.slice(startIdx, endIdx + 1)
-                const baseIndent = detectBaseIndent(lines, startIdx, endIdx + 1, originalRange)
+                // Insert new content verbatim (no forced indentation adjustment)
+                const newContentLines = params.newString.split("\n")
 
-                // Adjust new content indentation to match context
-                const adjustedNew = adjustIndent(params.newString, baseIndent)
-
-                // Replace the line range
+                // Replace the line range  
                 const beforeLines = lines.slice(0, startIdx)
                 const afterLines = lines.slice(endIdx + 1)
-                const newContentLines = adjustedNew.split("\n")
                 const finalLines = [...beforeLines, ...newContentLines, ...afterLines]
 
                 contentNew = finalLines.join("\n")
