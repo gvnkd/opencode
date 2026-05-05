@@ -32,8 +32,21 @@ function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
   return text.replaceAll("\n", "\r\n")
 }
 
-/** Detect base indentation from lines before startLine or after endLine */
-function detectBaseIndent(lines: string[], startIdx: number, endIdx: number): number {
+/** Detect base indentation from surrounding context or first line of range */
+function detectBaseIndent(lines: string[], startIdx: number, endIdx: number, originalRange?: string[]): number {
+  // If we have original lines being replaced, use their min indent
+  if (originalRange && originalRange.length > 0) {
+    const nonEmpty = originalRange.filter((l) => l.trim().length > 0)
+    if (nonEmpty.length > 0) {
+      let minIndent = Infinity
+      for (const line of nonEmpty) {
+        const m = line.match(/^(\s*)/)
+        if (m && m[1].length < minIndent) minIndent = m[1].length
+      }
+      return minIndent === Infinity ? 0 : minIndent
+    }
+  }
+
   // Check line before range
   if (startIdx > 0) {
     const prev = lines[startIdx - 1]
@@ -61,18 +74,21 @@ function adjustIndent(content: string, targetIndent: number): string {
   let minIndent = Infinity
   for (const line of nonEmpty) {
     const m = line.match(/^(\s*)/)
-    if (m) minIndent = Math.min(minIndent, m[1].length)
+    if (m && m[1].length < minIndent) minIndent = m[1].length
   }
   if (minIndent === Infinity) minIndent = 0
+
+  // If content already matches target indent, no adjustment needed
+  if (minIndent === targetIndent) return content
 
   // Adjust each line to target indent baseline
   return lines.map((line) => {
     if (line.trim().length === 0) return ""
     const m = line.match(/^( *)(.*)$/)
     if (!m) return line
-    const currentIndent = m[1].length - minIndent // Relative indent from content base
-    const newIndent = targetIndent + currentIndent  // Apply to target baseline
-    return " ".repeat(Math.max(0, newIndent)) + m[2]
+    const currentRelative = Math.max(0, m[1].length - minIndent) // Relative indent from content base
+    const newIndent = targetIndent + currentRelative             // Apply to target baseline
+    return " ".repeat(newIndent) + m[2]
   }).join("\n")
 }
 
@@ -185,8 +201,9 @@ export const EditTool = Tool.define(
                   throw new Error(`Invalid line range: ${params.startLine}-${params.endLine} for file with ${lines.length} lines`)
                 }
 
-                // Detect base indentation from surrounding context
-                const baseIndent = detectBaseIndent(lines, startIdx, endIdx + 1)
+                // Detect base indentation from original lines being replaced (preserves context indent)
+                const originalRange = lines.slice(startIdx, endIdx + 1)
+                const baseIndent = detectBaseIndent(lines, startIdx, endIdx + 1, originalRange)
 
                 // Adjust new content indentation to match context
                 const adjustedNew = adjustIndent(params.newString, baseIndent)
