@@ -67,7 +67,7 @@ function adjustIndent(content: string, targetIndent: number): string {
   const lines = content.split("\n")
   if (lines.length === 0) return content
 
-  // Find minimum non-empty indent in new content
+  // Find minimum non-empty indent in new content  
   const nonEmpty = lines.filter((l) => l.trim().length > 0)
   if (nonEmpty.length === 0) return content
 
@@ -81,14 +81,14 @@ function adjustIndent(content: string, targetIndent: number): string {
   // If content already matches target indent, no adjustment needed
   if (minIndent === targetIndent) return content
 
-  // Adjust each line to target indent baseline
+  // Adjust each line to target indent baseline. Allow lines to go shallower
+  // than targetIndent by using the full relative delta from the content's own base.
   return lines.map((line) => {
     if (line.trim().length === 0) return ""
     const m = line.match(/^( *)(.*)$/)
     if (!m) return line
-    const currentRelative = Math.max(0, m[1].length - minIndent) // Relative indent from content base
-    const newIndent = targetIndent + currentRelative             // Apply to target baseline
-    return " ".repeat(newIndent) + m[2]
+    // Preserve original indentation exactly — no forced floor clamping to targetIndent
+    return " ".repeat(m[1].length - minIndent + targetIndent) + m[2]
   }).join("\n")
 }
 
