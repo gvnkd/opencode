@@ -89,6 +89,17 @@ export const EditTool = Tool.define(
           const filePath = path.isAbsolute(params.filePath)
             ? params.filePath
             : path.join(instance.directory, params.filePath)
+
+          // Enforce line-range replacement for Idris 2 source files (.idr) due to strict indentation.
+          if (filePath.endsWith(".idr")) {
+            if (params.oldString !== undefined && params.oldString !== null) {
+              throw new Error("Idris 2 files (.idr) must use line-range replacement. Do not provide 'oldString'; use 'startLine' and 'endLine' instead to avoid indentation errors.")
+            }
+            if (params.startLine === undefined || params.startLine === null) {
+              throw new Error("Idris 2 files (.idr) require line-range replacement. Please provide 'startLine'.")
+            }
+          }
+
           yield* assertExternalDirectoryEffect(ctx, filePath)
 
           let diff = ""
