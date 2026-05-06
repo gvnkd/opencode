@@ -5,11 +5,14 @@ Usage:
 - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
 - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
 
+**CRITICAL: Idris 2 (`.idr`) Enforcement:**
+- For `.idr` files, you **MUST use line-range mode**. String-matching (`oldString`) on `.idr` files is disabled/enforced against because Idris uses strict whitespace/indentation rules that break string matching. Always provide `startLine` and `endLine` for these files.
+
 String mode (oldString/newString):
 - The edit will FAIL if `oldString` is not found in the file with an error "oldString not found in content".
 - The edit will FAIL if `oldString` is found multiple times with an error "Found multiple matches...". Provide more surrounding context or use `replaceAll`.
 
-Line-range mode (startLine/endLine/newString) — recommended for complex edits:
+Line-range mode (startLine/endLine/newString) — recommended for complex edits & Idris2:
 - Specify `startLine` and optional `endLine` (1-indexed). Omit `oldString` to activate this mode.
-- Indentation is auto-adjusted to match surrounding context. Write code with normal indentation; the tool shifts it automatically.
+- Content is inserted **verbatim** with your exact indentation preserved. Write code with correct indentation from the start; no auto-adjustment occurs.
 - Use this mode when oldString matching is unreliable (deep nesting, whitespace sensitivity, encoded files).
